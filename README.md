@@ -1,162 +1,125 @@
-## Font Classification – Overview
+# Font Classification – Cách chạy Inference
 
-End-to-end pipeline for generating synthetic font datasets (with optional pattern-filled text), training a ResNet50 classifier, and running fast inference with consistent padding/resize.
-
-### Project Structure
-- `dataset_generation.py`: Generate dataset with backgrounds and optional pattern-filled text. Optimized batching and parallel chunks.
-- `extend_dataset.py`: Extend `dataset_output_english` from a specific font onward (e.g., Inder) using the same generator.
-- `fast_generate.py`: One-shot fast dataset build (optimized defaults; 200 images/font).
-- `generate_more_train_data.py`: Add more rendered images for existing train fonts.
-- `generate_specific_font.py`: Generate images for a single font family.
-- `augment_train_fonts.py`: Albumentations-based augmentation for images in `dataset_train`.
-- `check_patterns.py`: Validate and clean corrupted images in `patterns/`.
-- `font_detectionction.py` / `detection_2.py`: Training scripts (ResNet50 + Albumentations).
-- `inference.py`: Inference with padding to 320x320 then resize to 224x224; batch support; results saved to `result/`.
-
-### Requirements
-- Python 3.10+
-- PyTorch + torchvision
-- Albumentations, OpenCV, Pillow, numpy, pandas, tqdm, loguru, scikit-learn, imutils, matplotlib, tabulate
-
-Install (example):
-```bash
-pip install -r requirements.txt  # if available
-# or install key libs
-pip install torch torchvision albumentations opencv-python pillow numpy pandas tqdm loguru scikit-learn imutils matplotlib tabulate
-```
-
-### Paths and Key Folders
-- Fonts: `fonts/ofl`
-- Backgrounds: `backgrounds/`
-- Patterns (optional): `patterns/` (png/jpg/jpeg)
-- Output dataset: `dataset_output_english/`
-- Train/Val splits: `dataset_train`, `dataset_val`
-- Inference results: `result/`
+Hướng dẫn chạy dự đoán font từ ảnh (inference) trong project.
 
 ---
 
-## Dataset Generation
+## Yêu cầu
 
-The generator mixes normal text and pattern-filled text. It uses a background either from images or solid color. Font size range and image counts are configurable.
+- Python 3 (khuyến nghị 3.10+)
+- PyTorch, torchvision (đã cài trong môi trường train)
+- Các package trong `requirements.txt`:
 
-### Quick generation (optimized)
-Creates 200 images per font across all available font families.
 ```bash
-python fast_generate.py
-```
-Defaults in `fast_generate.py`:
-- `num_images_per_font = 200`
-- `patterns_folder = "patterns"`
-- `num_workers = 16`
-
-### Extend an existing dataset
-Start after a specific font family (e.g., Inder) and add new families only.
-```bash
-python extend_dataset.py
-```
-Tune inside the script:
-- `start_from_font = "Inder"`
-- `num_images_per_font = 200`
-- `num_workers`, `patterns_folder`
-
-### Generator configuration (dataset_generation.py)
-- Font size range (default): `min=64`, `max=144`
-- Normal vs pattern ratio: default ~30% pattern, 70% normal
-- Batching: batch size 20 to reduce I/O overhead
-- Workers (chunks): default 16
-
-If you deleted `dataset_output_english`, just rerun:
-```bash
-python fast_generate.py
+pip install -r requirements.txt
 ```
 
-### Validate/clean pattern images
-If you see errors like “image file is truncated”, clean invalid patterns:
-```bash
-python check_patterns.py
-```
+Trong `requirements.txt` có: `pillow`, `fonttools`, `gradio`, `easyocr`. API cần thêm: `fastapi`, `uvicorn` (nếu chưa có).
 
 ---
 
-## Train
+## Chuẩn bị trước khi chạy
 
-Two example training scripts are provided:
-- `font_detectionction.py`: Has `train_transform` and `val_transform`; validation resizes to 224x224.
-- `detection_2.py`: Similar, includes sampler, metrics logging, etc.
-
-Typical setup:
-1) Split dataset into train/val
-```bash
-python split_dataset.py  # default ratios
-```
-2) Update script variables (`train_dataset_path`, `val_dataset_path`, etc.).
-3) Run training (example):
-```bash
-python font_detectionction.py
-```
-
-Optional augmentation for `dataset_train` only:
-```bash
-python augment_train_fonts.py dataset_train --add 90 --start_from Charmonman
-```
-
-Add rendered images (not Albumentations) to train:
-```bash
-python generate_more_train_data.py dataset_train --add_per_font 90 \
-  --fonts_path fonts/ofl --backgrounds_path backgrounds/ --text_source single_word \
-  --textfile words_alpha.txt
-``;
-
-Generate for a specific family:
-```bash
-python generate_specific_font.py 42dotSans --count 100 --out dataset_output_english \
-  --fonts_path fonts/ofl --backgrounds_path backgrounds/ --text_source single_word \
-  --textfile words_alpha.txt
-```
+1. **Checkpoint model:** Đặt file `.pth` (ví dụ `save_2/deepfont_resnet50_model_BEST.pth`) đúng đường dẫn ghi trong từng script (`MODEL_PATH`).
+2. **Thư mục font:** Có thư mục chứa font theo từng family (mỗi folder = một font, ví dụ `label` hoặc `label_1`). Đường dẫn cấu hình trong code là `FONT_DIR`.
+3. **API / Gradio:** Cần file `font_files.hdf5` (tạo bằng `python build_hdf5_from_label.py` từ thư mục font đang dùng).
 
 ---
 
-## Inference
+## 1. Chạy batch (thư mục ảnh) – `inference.py`
 
-`inference.py` uses padding to 320x320 (keep aspect), then resizes to 224x224 to match validation preprocessing. Results are saved to `result/` as a CSV and visualization PNGs.
+Dự đoán font cho tất cả ảnh trong một thư mục, ghi kết quả ra thư mục khác.
 
-Configure at top of the file:
-```python
-model_path = 'deepfont_resnet50_epoch_78.pth'
-dataset_path = 'dataset_train_1'  # used to build label mapping
-random_data_path = 'dataset_train_1/AbhayaLibre/0003_Bold_Feature;640.jpg'
-result_folder = 'result'
-```
+**Bước 1:** Chỉnh trong `inference.py` (đầu file):
 
-Run:
+- `INPUT_FOLDER`: thư mục chứa ảnh (mặc định `"a"`).
+- `OUTPUT_FOLDER`: thư mục ghi kết quả (mặc định `"result_a_1"`).
+- `MODEL_PATH`: đường dẫn file `.pth`.
+- `FONT_DIR`: thư mục font (để vẽ bảng chữ cái).
+
+**Bước 2:** Chạy:
+
 ```bash
 python inference.py
 ```
 
-Batch inference is automatic when you pass a folder in `random_data_path`.
+**Kết quả:**
+
+- Trong `OUTPUT_FOLDER`: mỗi ảnh có một file PNG (ảnh sau padding + Top-5 bảng chữ cái) và file `prediction_log.txt` (Top-1 font cho từng ảnh).
 
 ---
 
-## Performance Tips
-- Increase `num_workers` in generation to utilize more CPU cores.
-- Keep `patterns/` curated; remove corrupt images using `check_patterns.py`.
-- Batch size for generation is set to 20 to reduce I/O operations.
-- JPEG `quality=85` gives a good speed/size trade-off.
-- For long runs, launch in background:
+## 2. Chạy API – `api_inference.py`
+
+Phục vụ inference qua HTTP: gửi ảnh (URL hoặc base64), nhận Top-K font, ảnh kết quả, ZIP font, và (nếu bật) kết quả OCR.
+
+**Bước 1:** Cài thêm (nếu chưa có):
+
 ```bash
-mkdir -p logs
-nohup python fast_generate.py > logs/generate_$(date +%F_%H-%M-%S).log 2>&1 &
+pip install fastapi uvicorn
 ```
 
+**Bước 2:** Tạo `font_files.hdf5` từ thư mục font (một lần):
+
+```bash
+python build_hdf5_from_label.py
+```
+
+(Script mặc định đọc từ `label_2` và ghi `font_files.hdf5`. Có thể sửa `SOURCE_DIR` trong file cho đúng.)
+
+**Bước 3:** Chạy server:
+
+```bash
+uvicorn api_inference:app --host 0.0.0.0 --port 8000
+```
+
+Hoặc:
+
+```bash
+python api_inference.py
+```
+
+(nếu trong file có `if __name__ == "__main__": uvicorn.run(...)`).
+
+**Bước 4:** Gửi request:
+
+- Mở `http://localhost:8000/docs` để xem Swagger và gọi thử.
+- POST `/predict_font/` với body JSON: `{"image_url": "https://..."}` hoặc `{"image_base64": "..."}`.
+
+**Kết quả:** JSON gồm `predictions` (Top-3 font), `ocr_result`, `result_image_base64`, `zip_base64`, `zip_filename`, v.v.
+
 ---
 
-## Troubleshooting
-- “image file is truncated”: run `python check_patterns.py` to remove bad pattern files; the generator also falls back to normal text if a pattern fails.
-- Class count mismatch in inference: ensure `dataset_path` used for label mapping matches your trained classes.
-- Slow generation: confirm `num_workers` and that `patterns/` and `backgrounds/` are on fast storage.
+## 3. Chạy giao diện web (Gradio) – `app_gradio.py`
+
+Upload ảnh trên trình duyệt, xem từng vùng chữ (OCR) và Top-3 font cho từng vùng.
+
+**Bước 1:** Đảm bảo đã cài dependencies (trong đó có `gradio`, `easyocr`):
+
+```bash
+pip install -r requirements.txt
+```
+
+**Bước 2:** Chạy:
+
+```bash
+python app_gradio.py
+```
+
+**Bước 3:** Mở địa chỉ in ra trong terminal (mặc định `http://127.0.0.1:7860` hoặc `http://0.0.0.0:7860`).
+
+**Cách dùng:** Chọn hoặc kéo thả ảnh → bấm nút dự đoán → xem ảnh kết quả (từng vùng chữ + Top-3 font), bảng và tải ZIP. Bấm vào ảnh để xem phóng to.
+
+**Link public (chia sẻ):** Trong `app_gradio.py`, đổi `share=False` thành `share=True` rồi chạy lại; Gradio sẽ in ra link dạng `https://....gradio.live`.
 
 ---
 
-## License
-Fonts, backgrounds, and patterns may have their own licenses. Ensure compliance when distributing datasets.
+## Tóm tắt lệnh chạy
 
+| Cách dùng      | Lệnh |
+|----------------|------|
+| Batch (thư mục)| `python inference.py` |
+| API            | `uvicorn api_inference:app --host 0.0.0.0 --port 8000` |
+| Giao diện web  | `python app_gradio.py` |
+
+Chỉnh đường dẫn model, thư mục ảnh, thư mục font trong từng file tương ứng (biến cấu hình ở đầu file).
